@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"io/ioutil"
 	"log"
@@ -173,8 +174,14 @@ func (e *Exporter) getInstance() (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	usage := m["usage"].(map[string]interface{})
-	users := usage["users"].(map[string]interface{})
+	usage, ok := m["usage"].(map[string]interface{})
+	if !ok {
+		return 0, errors.New("unable to parse 'usage' from instance API")
+	}
+	users, ok := usage["users"].(map[string]interface{})
+	if !ok {
+		return 0, errors.New("unable to parse 'users' from instance API usage")
+	}
 	return users["active_month"].(float64), nil
 }
 
