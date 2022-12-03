@@ -51,13 +51,13 @@ var (
 	// GET https://mastodon.example/api/v1/instance/activity HTTP/1.1
 	numStatuses = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", "num_statuses"),
-		"the number of statuses that have been posted",
-		nil, nil)
+		"the number of statuses that have been posted in the given week",
+		[]string{"week"}, nil)
 
 	numLogins = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", "num_logins"),
-		"the number of logins the instance has seen",
-		nil, nil)
+		"the number of logins the instance has seen in the given week",
+		[]string{"week"}, nil)
 )
 
 func main() {
@@ -107,14 +107,18 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(numPeers, prometheus.GaugeValue, float64(peers))
 
-	statuses, logins, err := e.getActivity()
+	statusesPerWeek, loginsPerWeek, err := e.getActivity()
 	if err != nil {
 		ch <- prometheus.MustNewConstMetric(up, prometheus.GaugeValue, 0)
 		log.Println(err)
 		return
 	}
-	ch <- prometheus.MustNewConstMetric(numStatuses, prometheus.GaugeValue, float64(statuses))
-	ch <- prometheus.MustNewConstMetric(numLogins, prometheus.GaugeValue, float64(logins))
+	for week, statuses := range statusesPerWeek {
+		ch <- prometheus.MustNewConstMetric(numStatuses, prometheus.GaugeValue, float64(statuses), week)
+	}
+	for week, logins := range loginsPerWeek {
+		ch <- prometheus.MustNewConstMetric(numLogins, prometheus.GaugeValue, float64(logins), week)
+	}
 	ch <- prometheus.MustNewConstMetric(up, prometheus.GaugeValue, 1)
 	log.Println("collected metrics successfully")
 }
@@ -193,25 +197,19 @@ func (e *Exporter) getPeers() (int, error) {
 	return len(m), nil
 }
 
-func (e *Exporter) getActivity() (statuses int, logins int, err error) {
+func (e *Exporter) getActivity() (statusesPerWeek map[string]int, loginsPerWeek map[string]int, err error) {
 	var a []interface{}
 	a, err = getJsonArray("https://"+e.domain+activityApi)
 	if err != nil {
-		return 0, 0, err
+		return
 	}
-	week := 0
+	statusesPerWeek = make(map[string]int)
+	loginsPerWeek = make(map[string]int)
 	for _, wk := range a {
 		w := wk.(map[string]interface{})
-		var wNum int
-		wNum, err := strconv.Atoi(w["week"].(string))
-		if err != nil {
-			return 0, 0, err
-		}
-		if wNum > week {
-			week = wNum
-			statuses, _ = strconv.Atoi(w["statuses"].(string))
-			logins, _ = strconv.Atoi(w["logins"].(string))
-		}
+		week := w["week"].(string)
+		statusesPerWeek[week], _ = strconv.Atoi(w["statuses"].(string))
+		loginsPerWeek[week], _ = strconv.Atoi(w["logins"].(string))
 	}
 	return
 }
