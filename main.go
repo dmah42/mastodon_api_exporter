@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -59,10 +60,16 @@ var (
 )
 
 func main() {
+	flag.Parse()
+
 	instanceExporter := NewExporter(*domain)
 	prometheus.MustRegister(instanceExporter)
 
 	http.Handle(*path, promhttp.Handler())
+
+	log.Printf("exporting from %s", *domain)
+	log.Printf("listening on :%s%s", *port, *path)
+
 	log.Fatal(http.ListenAndServe(":"+*port, nil))
 }
 
@@ -89,7 +96,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		log.Println(err)
 		return
 	}
-	ch <- prometheus.MustNewConstMetric(monthlyActives, prometheus.GaugeValue, float64(actives))
+	ch <- prometheus.MustNewConstMetric(monthlyActives, prometheus.GaugeValue, actives)
 
 	peers, err := e.getPeers()
 	if err != nil {
@@ -108,9 +115,10 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(numStatuses, prometheus.GaugeValue, float64(statuses))
 	ch <- prometheus.MustNewConstMetric(numLogins, prometheus.GaugeValue, float64(logins))
 	ch <- prometheus.MustNewConstMetric(up, prometheus.GaugeValue, 1)
+	log.Println("collected metrics successfully")
 }
 
-func getJson(url string) (map[string]interface{}, error) {
+func getJsonMap(url string) (map[string]interface{}, error) {
 	var m map[string]interface{}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -135,18 +143,43 @@ func getJson(url string) (map[string]interface{}, error) {
 	return m, nil
 }
 
-func (e *Exporter) getInstance() (int, error) {
-	m, err := getJson("https://"+e.domain+instanceApi)
+func getJsonArray(url string) ([]interface{}, error) {
+	var a []interface{}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return a, err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return a, err
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return a, err
+	}
+
+	if err := json.Unmarshal(body, &a); err != nil {
+		return nil, err
+	}
+
+	return a, nil
+}
+
+func (e *Exporter) getInstance() (float64, error) {
+	m, err := getJsonMap("https://"+e.domain+instanceApi)
 	if err != nil {
 		return 0, err
 	}
 	usage := m["usage"].(map[string]interface{})
-	users := usage["users"].(map[string]int)
-	return users["active_month"], nil
+	users := usage["users"].(map[string]interface{})
+	return users["active_month"].(float64), nil
 }
 
 func (e *Exporter) getPeers() (int, error) {
-	m, err := getJson("https://"+e.domain+peersApi)
+	m, err := getJsonArray("https://"+e.domain+peersApi)
 	if err != nil {
 		return 0, err
 	}
@@ -154,18 +187,23 @@ func (e *Exporter) getPeers() (int, error) {
 }
 
 func (e *Exporter) getActivity() (statuses int, logins int, err error) {
-	var m map[string]interface{}
-	m, err = getJson("https://"+e.domain+activityApi)
+	var a []interface{}
+	a, err = getJsonArray("https://"+e.domain+activityApi)
 	if err != nil {
 		return 0, 0, err
 	}
 	week := 0
-	for _, wk := range m {
-		w := wk.(map[string]int)
-		if w["week"] > week {
-			week = w["week"]
-			statuses = w["statuses"]
-			logins = w["logins"]
+	for _, wk := range a {
+		w := wk.(map[string]interface{})
+		var wNum int
+		wNum, err := strconv.Atoi(w["week"].(string))
+		if err != nil {
+			return 0, 0, err
+		}
+		if wNum > week {
+			week = wNum
+			statuses, _ = strconv.Atoi(w["statuses"].(string))
+			logins, _ = strconv.Atoi(w["logins"].(string))
 		}
 	}
 	return
