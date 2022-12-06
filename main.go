@@ -15,15 +15,16 @@ import (
 )
 
 const (
-	namespace = "mastodon"
-	instanceApi = "/api/v2/instance"
-	peersApi = "/api/v1/instance/peers"
-	activityApi = "/api/v1/instance/activity"
+	namespace     = "mastodon"
+	instanceV1Api = "/api/v1/instance"
+	instanceV2Api = "/api/v2/instance"
+	peersApi      = "/api/v1/instance/peers"
+	activityApi   = "/api/v1/instance/activity"
 )
 
 var (
-	port = flag.String("port", "9876", "the port on which to listen")
-	path = flag.String("path", "/metrics", "the path on which to expose metrics")
+	port   = flag.String("port", "9876", "the port on which to listen")
+	path   = flag.String("path", "/metrics", "the path on which to expose metrics")
 	domain = flag.String("domain", "https://mastodon.example", "the domain on which mastodon is running")
 
 	tr = &http.Transport{
@@ -35,6 +36,19 @@ var (
 		prometheus.BuildFQName(namespace, "", "up"),
 		"was the last query successful",
 		nil, nil)
+
+	// GET https://mastodon.example/api/v1/instance
+	userCount = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "", "user_count"),
+		"number of users", nil, nil)
+
+	statusCount = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "", "status_count"),
+		"number of statuses", nil, nil)
+
+	domainCount = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "", "domain_count"),
+		"number of domains", nil, nil)
 
 	// GET https://mastodon.example/api/v2/instance
 	monthlyActives = prometheus.NewDesc(
@@ -79,11 +93,14 @@ type Exporter struct {
 }
 
 func NewExporter(domain string) *Exporter {
-	return &Exporter { domain: domain }
+	return &Exporter{domain: domain}
 }
 
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- up
+	ch <- userCount
+	ch <- statusCount
+	ch <- domainCount
 	ch <- monthlyActives
 	ch <- numPeers
 	ch <- numStatuses
@@ -91,7 +108,17 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-	actives, err := e.getInstance()
+	users, statuses, domains, err := e.getInstanceV1()
+	if err != nil {
+		ch <- prometheus.MustNewConstMetric(up, prometheus.GaugeValue, 0)
+		log.Println(err)
+		return
+	}
+	ch <- prometheus.MustNewConstMetric(userCount, prometheus.GaugeValue, users)
+	ch <- prometheus.MustNewConstMetric(statusCount, prometheus.GaugeValue, statuses)
+	ch <- prometheus.MustNewConstMetric(domainCount, prometheus.GaugeValue, domains)
+
+	actives, err := e.getInstanceV2()
 	if err != nil {
 		ch <- prometheus.MustNewConstMetric(up, prometheus.GaugeValue, 0)
 		log.Println(err)
@@ -173,8 +200,21 @@ func getJsonArray(url string) ([]interface{}, error) {
 	return a, nil
 }
 
-func (e *Exporter) getInstance() (float64, error) {
-	m, err := getJsonMap("https://"+e.domain+instanceApi)
+func (e *Exporter) getInstanceV1() (float64, float64, float64, error) {
+	m, err := getJsonMap("https://" + e.domain + instanceV1Api)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	stats, ok := m["stats"].(map[string]interface{})
+	if !ok {
+		return 0, 0, 0, err
+	}
+
+	return stats["user_count"].(float64), stats["status_count"].(float64), stats["domain_count"].(float64), nil
+}
+
+func (e *Exporter) getInstanceV2() (float64, error) {
+	m, err := getJsonMap("https://" + e.domain + instanceV2Api)
 	if err != nil {
 		return 0, err
 	}
@@ -190,7 +230,7 @@ func (e *Exporter) getInstance() (float64, error) {
 }
 
 func (e *Exporter) getPeers() (int, error) {
-	m, err := getJsonArray("https://"+e.domain+peersApi)
+	m, err := getJsonArray("https://" + e.domain + peersApi)
 	if err != nil {
 		return 0, err
 	}
@@ -199,7 +239,7 @@ func (e *Exporter) getPeers() (int, error) {
 
 func (e *Exporter) getActivity() (statusesPerWeek map[string]int, loginsPerWeek map[string]int, err error) {
 	var a []interface{}
-	a, err = getJsonArray("https://"+e.domain+activityApi)
+	a, err = getJsonArray("https://" + e.domain + activityApi)
 	if err != nil {
 		return
 	}
