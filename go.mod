@@ -1,4 +1,4 @@
-module mastodon_api_exporter
+module github.com/dmah42/mastodon_api_exporter
 
 go 1.19
 
